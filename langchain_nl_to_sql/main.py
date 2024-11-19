@@ -1,11 +1,12 @@
 import re
 import json
 from datetime import datetime, timedelta
-from db_utils import initialize_database
+from db_utils import initialize_database, update_database_schema, print_all_entries
 from openai import OpenAI
 import sqlite3
 
-initialize_database()
+#initialize_database()
+update_database_schema()
 client = OpenAI()
 
 
@@ -77,6 +78,24 @@ def normalize_month_name(timestamp):
 
     return timestamp  # Return the original timestamp if no change is needed
 
+def parse_quantity_and_unit(quantity_string):
+    """
+    Extracts the numeric value and unit from a quantity string.
+    
+    Args:
+        quantity_string (str): The input string, e.g., "20 pieces".
+        
+    Returns:
+        tuple: A tuple with (value as float, unit as string) or (None, None) if invalid.
+    """
+    # Regular expression to match a number and an optional unit
+    match = re.match(r"([\d.]+)\s*(.*)", quantity_string)
+    if match:
+        value = float(match.group(1))  # Extract the numeric value
+        unit = match.group(2).strip()  # Extract the unit, if any, and strip extra spaces
+        return value, unit
+    return None, None  # Return None if the input is not in the expected format
+
 
 # Agent 1: Parsing Natural Language
 def agent_1(user_input):
@@ -104,8 +123,17 @@ def agent_1(user_input):
     {{
         "Task": "Add",
         "Item": "Almonds",
-        "Quantity": 28,
-        "Time Eaten": "08:00 AM, Monday, Nov 18, 2024"
+        "Quantity": 20 pieces,
+        "Time Eaten": "08:00 AM, Monday, Nov 18, 2022"
+    }}
+
+    Example Input 1: "I drank half a glass of milk in the evening."
+    Example Output 1:
+    {{
+        "Task": "Add",
+        "Item": "Milk",
+        "Quantity": 4 ounces,
+        "Time Eaten": "08:00 AM, Monday, Nov 18, 2022"
     }}
 
     Parse this input: "{user_input}"
@@ -131,16 +159,11 @@ def agent_2(parsed_json):
     Estimates macros and serving size for the food item using the food name.
     """
     item_name = parsed_json["Item"]
+    quantity = parsed_json["Quantity"]
 
     # Simulated vector store lookup
     vector_store = {
-        "Almonds": {
-            "Calories": 162,
-            "Protein": 6,
-            "Carbs": 6,
-            "Fats": 14,
-            "Serving Size": 28  # Grams per serving
-        }
+        "Almonds": "Almonds"
     }
 
     if item_name in vector_store:
@@ -148,14 +171,15 @@ def agent_2(parsed_json):
 
     # If not found, use GPT to estimate macros and serving size
     prompt = f"""
-    You are a nutritional assistant that estimates macros and serving size for food items.
+    You are a nutritional assistant that estimates macros and common serving size for food items.
     For the item '{item_name}', provide the following JSON:
     {{
         "Calories": <integer>,  # Calories per serving
         "Protein": <float>,  # Protein per serving in grams
         "Carbs": <float>,  # Carbohydrates per serving in grams
         "Fats": <float>,  # Fats per serving in grams
-        "Serving Size": <float>  # Serving size in grams
+        "Fiber": <float>,  # Fiber per serving in grams
+        "Common Serving Size": <float>  # commonly used serving size in the same unit as used in (`{quantity}`).
     }}
     """
     response = client.chat.completions.create(
@@ -180,7 +204,10 @@ def agent_3(parsed_json, macros):
     import sqlite3
     from datetime import datetime
 
-    quantity = float(parsed_json["Quantity"])  # Quantity in grams
+    quantity = parsed_json["Quantity"]
+    quantity_value, quantity_unit = parse_quantity_and_unit(quantity)
+    quantity_value = float(quantity_value)
+
     food_name = parsed_json["Item"]
 
     # Resolve dynamic dates
@@ -193,9 +220,16 @@ def agent_3(parsed_json, macros):
     timestamp = datetime.strptime(corrected_timestamp, "%I:%M %p, %A, %b %d, %Y")
 
     # Dynamic serving size and macros
-    serving_size_grams = macros["Serving Size"]
-    servings = quantity / serving_size_grams  # Calculate number of servings
-    total_macros = {key: value * servings for key, value in macros.items() if key != "Serving Size"}
+    common_quantity = parsed_json["Common Serving Size"]
+    common_quantity_value, common_quantity_unit = parse_quantity_and_unit(common_quantity)
+    common_quantity_value = float(common_quantity_value)
+    # Compare units ignoring case
+    if quantity_unit.lower() == common_quantity_unit.lower():
+        servings = quantity_value /common_quantity_value
+        total_macros = {key: value * servings for key, value in macros.items() if key != "Serving Size"} 
+    else:
+        raise ValueError(f"Unit mismatch: Input quantity is in {quantity_unit} but serving size is in {common_quantity_unit}")
+
 
     # Enriched data for database insertion
     enriched_data = {
@@ -210,8 +244,8 @@ def agent_3(parsed_json, macros):
     cursor = conn.cursor()
     cursor.execute(
         """
-        INSERT INTO FoodConsumption (food_name, quantity, time_eaten, calories, protein, carbs, fats)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO FoodConsumption (food_name, quantity, time_eaten, calories, protein, carbs, fats, fiber)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             enriched_data["food_name"],
@@ -221,6 +255,7 @@ def agent_3(parsed_json, macros):
             enriched_data["Protein"],
             enriched_data["Carbs"],
             enriched_data["Fats"],
+            enriched_data["Fiber"],
         ),
     )
     conn.commit()
@@ -249,8 +284,9 @@ def process_user_input(user_input):
 if __name__ == "__main__":
     initialize_database()
     
-    user_input = "I ate a handful of almonds this morning."
+    user_input = "I ate a handful of walnuts this morning."
     result = process_user_input(user_input)
     
     print("Final Output:")
-    print(result)
+    #print(result)
+    print_all_entries()
