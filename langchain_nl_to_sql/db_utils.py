@@ -52,7 +52,7 @@ def update_database_schema():
     cursor.execute("""
         CREATE TABLE FoodConsumption (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            food_name TEXT,
+            item TEXT,
             quantity FLOAT,
             time_eaten DATETIME,
             calories INTEGER,
@@ -66,7 +66,7 @@ def update_database_schema():
     # Reinsert the data, setting fiber to a default value (e.g., 0)
     for row in rows:
         cursor.execute("""
-            INSERT INTO FoodConsumption (id, food_name, quantity, time_eaten, calories, protein, carbs, fats, fiber)
+            INSERT INTO FoodConsumption (id, item, quantity, time_eaten, calories, protein, carbs, fats, fiber)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, row + (0,))  # Append default value for fiber
 
