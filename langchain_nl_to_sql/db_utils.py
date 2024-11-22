@@ -67,7 +67,7 @@ def update_database_schema():
     for row in rows:
         cursor.execute("""
             INSERT INTO FoodConsumption (id, food_name, quantity, time_eaten, calories, protein, carbs, fats, fiber)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, row + (0,))  # Append default value for fiber
 
     conn.commit()

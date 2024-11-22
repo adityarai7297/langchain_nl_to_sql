@@ -5,8 +5,8 @@ from db_utils import initialize_database, update_database_schema, print_all_entr
 from openai import OpenAI
 import sqlite3
 
-#initialize_database()
-update_database_schema()
+initialize_database()
+#update_database_schema()
 client = OpenAI()
 
 
@@ -78,6 +78,55 @@ def normalize_month_name(timestamp):
 
     return timestamp  # Return the original timestamp if no change is needed
 
+from datetime import datetime
+
+def validate_and_format_time(time_eaten):
+    """
+    Validates and reformats the 'Time Eaten' field to match the desired format.
+    Handles placeholders like 'Current Time'.
+    """
+    # Handle "Current Time" explicitly
+    if time_eaten.strip().lower() == "current time":
+        current_time = datetime.now().strftime("%I:%M %p, %A, %b %d, %Y")
+        return current_time
+
+    # Prompt the agent to validate and reformat
+    prompt = f"""
+    You are an assistant that ensures the 'Time Eaten' field is properly formatted.
+    The desired format is: "HH:MM AM/PM, Day, Month DD, YYYY".
+    
+    Validate and reformat the following input if needed: "{time_eaten}".
+    If the input is ambiguous, replace it with the current date and time in the desired format.
+    
+    Output a valid JSON object with:
+    {{
+        "Validated Time Eaten": "<formatted_time>"
+    }}
+    """
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant for reformatting timestamps."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0,
+        )
+
+        raw_response = response.choices[0].message.content.strip()
+        formatted_time = extract_json(raw_response)["Validated Time Eaten"]
+        return formatted_time
+
+    except Exception as e:
+        # Fallback to current time if formatting fails
+        print(f"Error validating 'Time Eaten': {e}")
+        fallback_time = datetime.now().strftime("%I:%M %p, %A, %b %d, %Y")
+        print(f"Using fallback time: {fallback_time}")
+        return fallback_time
+
+
+
 def parse_quantity_and_unit(quantity_string):
     """
     Extracts the numeric value and unit from a quantity string.
@@ -117,7 +166,8 @@ def agent_1(user_input):
         - 'after dinner': Assume today with a default time of 8:00 PM.
         - 'at breakfast': Assume today with a default time of 8:00 AM.
         - If no time is mentioned, use the current time.
-
+    
+    Examples are provided below to demonstrate the format and logic. These examples are illustrative only; you must handle all valid inputs dynamically, even those not covered by the examples. Do not rely solely on these examples to produce your output.
     Example Input 1: "I ate a handful of almonds this morning."
     Example Output 1:
     {{
@@ -149,7 +199,6 @@ def agent_1(user_input):
 
     # Debugging: Print raw GPT response
     raw_response = response.choices[0].message.content.strip()
-    print("Raw GPT Response:", raw_response)
 
     # Extract and parse JSON
     return extract_json(raw_response)
@@ -179,7 +228,9 @@ def agent_2(parsed_json):
         "Carbs": <float>,  # Carbohydrates per serving in grams
         "Fats": <float>,  # Fats per serving in grams
         "Fiber": <float>,  # Fiber per serving in grams
-        "Common Serving Size": <float>  # commonly used serving size in the same unit as used in (`{quantity}`).
+        "Common Serving Size": "<string>"  # Format as "value unit" (e.g., "20 pieces" or "30 grams")
+        Examples are provided to demonstrate the format and logic. These examples are illustrative only; you must handle all valid inputs dynamically, even those not covered by the examples. Do not rely solely on these examples to produce your output.
+
     }}
     """
     response = client.chat.completions.create(
@@ -192,7 +243,40 @@ def agent_2(parsed_json):
     )
 
     raw_response = response.choices[0].message.content.strip()
-    print("Agent 2 Raw Response:", raw_response)
+    return extract_json(raw_response)
+
+def agent_3A(value_1, value_2):
+    """
+    Converts a given quantity into the desired unit.
+    Args:
+        value_1 (str): Quantity and unit (e.g., "5 pieces Almonds").
+        value_2 (str): Target unit (e.g., "ounces").
+    Returns:
+        dict: Converted quantity in JSON format.
+    """
+    prompt = f"""
+    You are a specialized unit conversion assistant for food items. Your goal is to take two inputs and output the converted quantity in the desired unit.
+    - Value 1: {value_1}
+    - Value 2: {value_2}
+
+    Convert the given quantity from its original unit to the target unit using accurate conversion rates for the specific item.
+    Output a valid JSON with the following structure:
+    {{
+        "Original Quantity": "<value_1>",
+        "Converted Quantity": "<converted_value> <target_unit>"
+    }}
+    """
+
+    response = client.chat.completions.create(
+        model="gpt-4",
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant for unit conversions."},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0,
+    )
+
+    raw_response = response.choices[0].message.content.strip()
     return extract_json(raw_response)
 
 
@@ -216,25 +300,37 @@ def agent_3(parsed_json, macros):
     corrected_timestamp = normalize_day_name(corrected_timestamp)  # Fix day names
     corrected_timestamp = normalize_month_name(corrected_timestamp)  # Fix month names
 
+    # Validate and format the 'Time Eaten' field
+    try:
+        corrected_timestamp = validate_and_format_time(corrected_timestamp)
+    except ValueError:
+        raise ValueError(f"Unable to format 'Time Eaten': {corrected_timestamp}")
+
     # Parse the corrected timestamp
     timestamp = datetime.strptime(corrected_timestamp, "%I:%M %p, %A, %b %d, %Y")
 
     # Dynamic serving size and macros
-    common_quantity = parsed_json["Common Serving Size"]
+    common_quantity = macros["Common Serving Size"]
     common_quantity_value, common_quantity_unit = parse_quantity_and_unit(common_quantity)
     common_quantity_value = float(common_quantity_value)
-    # Compare units ignoring case
-    if quantity_unit.lower() == common_quantity_unit.lower():
-        servings = quantity_value /common_quantity_value
-        total_macros = {key: value * servings for key, value in macros.items() if key != "Serving Size"} 
-    else:
-        raise ValueError(f"Unit mismatch: Input quantity is in {quantity_unit} but serving size is in {common_quantity_unit}")
 
+    # Compare units and convert if needed
+    if quantity_unit.lower() != common_quantity_unit.lower():
+        conversion_input = f"{quantity_value} {quantity_unit} {food_name}"
+        converted_result = agent_3A(conversion_input, common_quantity_unit)
+        converted_quantity = converted_result["Converted Quantity"]
+        converted_value, converted_unit = parse_quantity_and_unit(converted_quantity)
+        quantity_value = float(converted_value)  # Use the converted value
+        quantity_unit = converted_unit.lower()   # Update the unit after conversion
+
+    # Calculate total servings and macros
+    servings = quantity_value / common_quantity_value
+    total_macros = {key: value * servings for key, value in macros.items() if key not in ["Serving Size", "Common Serving Size"]}
 
     # Enriched data for database insertion
     enriched_data = {
         "food_name": food_name,
-        "quantity": quantity,
+        "quantity": f"{quantity_value} {quantity_unit}",
         "time_eaten": timestamp,
         **total_macros,
     }
@@ -264,18 +360,16 @@ def agent_3(parsed_json, macros):
     return enriched_data
 
 
+
+
 # Orchestrator: Process User Input
 def process_user_input(user_input):
     """
     Orchestrates the 3-agent chain.
     """
-    print("Agent 1: Parsing input...")
+
     parsed_json = agent_1(user_input)
-    
-    print("Agent 2: Estimating macros...")
     macros = agent_2(parsed_json)
-    
-    print("Agent 3: Enriching and storing data...")
     enriched_output = agent_3(parsed_json, macros)
     
     return enriched_output
@@ -284,9 +378,7 @@ def process_user_input(user_input):
 if __name__ == "__main__":
     initialize_database()
     
-    user_input = "I ate a handful of walnuts this morning."
+    user_input = input("Hello what did you eat? : ")
     result = process_user_input(user_input)
     
-    print("Final Output:")
-    #print(result)
     print_all_entries()
