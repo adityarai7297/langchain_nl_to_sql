@@ -102,3 +102,21 @@ def print_all_entries():
         print(f"Error fetching data: {e}")
     finally:
         conn.close()
+
+def print_total_calories():
+   
+    import sqlite3
+
+    conn = sqlite3.connect("food_consumption.db")
+    cursor = conn.cursor()
+
+    try:
+        # Fetch all entries from the FoodConsumption table
+        cursor.execute("SELECT SUM(calories) FROM FoodConsumption")
+        total_calories = cursor.fetchone()[0]
+        print(f"Total calories consumed: {total_calories}")
+
+    except sqlite3.Error as e:
+        print(f"Error fetching data: {e}")
+    finally:
+        conn.close()
