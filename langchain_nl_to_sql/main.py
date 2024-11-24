@@ -2,26 +2,24 @@ import re
 import json
 import sqlite3
 from datetime import datetime, timedelta
-from langchain_openai import ChatOpenAI
-from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain
 from db_utils import initialize_database, update_database_schema, print_all_entries, print_total_calories
-
+from openai import OpenAI
+from pinecone_utils import initialize_pinecone, add_to_pinecone
 initialize_database()
-
-llm = ChatOpenAI(model="gpt-4", temperature=0)
+#update_database_schema()
+client = OpenAI()
 
 # JSON extraction function
-def extract_json(response_text):
+def extract_json(gpt_response):
     """
     Extracts a JSON object from a GPT response, ignoring any extra text or comments.
     """
     try:
-        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        json_match = re.search(r'\{.*\}', gpt_response, re.DOTALL)
         if json_match:
             return json.loads(json_match.group())  # Parse and return the JSON
         else:
-            raise ValueError("No valid JSON object found in response.")
+            raise ValueError("No valid JSON object found in GPT response.")
     except json.JSONDecodeError as e:
         raise ValueError(f"Error decoding JSON: {e}")
 
@@ -69,25 +67,19 @@ def validate_and_format_time(time_eaten):
         return datetime.now().strftime("%I:%M %p, %A, %b %d, %Y")
 
 # Agent 1: Parsing Natural Language
-parse_prompt = PromptTemplate(
-    input_variables=["user_input"],
-    template="""You are an assistant that parses natural language inputs about food consumption into valid JSON format.
+def agent_1(user_input):
+    """
+    Parses natural language input into structured JSON format.
+    Handles multiple items and ambiguous times dynamically.
+    """
+    prompt = f"""
+    You are an assistant that parses natural language inputs about food consumption into valid JSON format.
     - Parse multiple distinct food items from the input and separate them into a list of JSON objects.
-    - Each item should have its own JSON object with exactly these keys: "Item", "Quantity", "Time Eaten"
+    - Each item should have its own JSON object.
     - Ensure that combinations like 'Diet Coke and Naan' are separated as distinct entries.
     - Always output a valid JSON array with no additional text, comments, or explanations.
     - Use double quotes (" ") for all keys and string values.
-    - If no quantity is specified, use "1 serving" as the default.
     - Ensure all timestamps are normalized and resolved.
-
-    Example output format:
-    [
-        {
-            "Item": "butter chicken",
-            "Quantity": "1 serving",
-            "Time Eaten": "current time"
-        }
-    ]
 
     Handle ambiguous times as follows:
     - If the input mentions 'this morning', assume today at 8:00 AM.
@@ -99,15 +91,51 @@ parse_prompt = PromptTemplate(
         - Dinner: 8:00 PM.
     - If no time is mentioned, default to the current time in the format "HH:MM AM/PM, Day, Month DD, YYYY".
 
-    Parse this input: {user_input}"""
-)
+    Example Input: "I had two Diet Cokes and a bowl of carrots this morning."
+    Example Output:
+    [
+        {{
+            "Task": "Add",
+            "Item": "Diet Coke",
+            "Quantity": "2 cans",
+            "Time Eaten": "08:00 AM, Monday, Nov 20, 2023"
+        }},
+        {{
+            "Task": "Add",
+            "Item": "Carrots",
+            "Quantity": "1 bowl",
+            "Time Eaten": "08:00 AM, Monday, Nov 20, 2023"
+        }}
+    ]
 
-parse_chain = parse_prompt | llm
+    Parse this input: "{user_input}"
+    """
+    print("------------------> Agent 1 Request: Parsing", user_input)
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant for parsing natural language into JSON."},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0
+    )
+    
+    # Clean the response by removing any markdown formatting
+    cleaned_response = response.choices[0].message.content.strip()
+    cleaned_response = re.sub(r'^```json\s*|\s*```$', '', cleaned_response)
+    
+    print("------------------> Agent 1 Response: Parsed JSON", cleaned_response)
+    return json.loads(cleaned_response)
 
 # Agent 2: Calculate Macros
-macro_prompt = PromptTemplate(
-    input_variables=["item_name", "quantity", "time_eaten"],
-    template="""
+def agent_2(parsed_json):
+    """
+    Calculates macros for the given item and quantity directly.
+    """
+    item_name = parsed_json["Item"]
+    quantity = parsed_json["Quantity"]
+    print("------------------> Agent 2 Request: finding macros for", item_name, quantity)
+    prompt = f"""
     You are a nutritional assistant that calculates the macros for food items.
     For the item '{item_name}' and the quantity '{quantity}', provide the following JSON:
     {{
@@ -118,13 +146,20 @@ macro_prompt = PromptTemplate(
         "Carbs": <float>,  # Total carbohydrates in grams
         "Fats": <float>,  # Total fats in grams
         "Fiber": <float>,  # Total fiber in grams
-        "Time Eaten": "{time_eaten}"
+        "Time Eaten": "{parsed_json['Time Eaten']}"
     }}
     Do not output anything else. Ensure the JSON is valid.
     """
-)
-
-macro_chain = LLMChain(llm=llm, prompt=macro_prompt)
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant for calculating nutritional macros."},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0,
+    )
+    print("------------------> Agent 2 Response: Macros ", response.choices[0].message.content.strip())
+    return extract_json(response.choices[0].message.content.strip())
 
 # Database Execution
 def store_in_database(macros):
@@ -176,31 +211,44 @@ def process_user_input(user_input):
     """
     Orchestrates the agents for multiple distinct items.
     """
-    parsed_json_list = json.loads(parse_chain.invoke({"user_input": user_input}).content)
-    print("------------------> Parsed JSON List:", parsed_json_list)
+    parsed_json_list = agent_1(user_input)
+    pinecone_index = initialize_pinecone()
 
     for parsed_json in parsed_json_list:
-        item_name = parsed_json["Item"]
-        quantity = parsed_json["Quantity"]
-        time_eaten = resolve_dynamic_dates(parsed_json["Time Eaten"])
-        time_eaten = normalize_day_name(time_eaten)
-        time_eaten = validate_and_format_time(time_eaten)
+        macros = agent_2(parsed_json)
 
-        macros = extract_json(macro_chain.run(
-            item_name=item_name,
-            quantity=quantity,
-            time_eaten=time_eaten
-        ))
+        # Resolve dynamic dates and validate time
+        macros["Time Eaten"] = resolve_dynamic_dates(macros["Time Eaten"])
+        macros["Time Eaten"] = normalize_day_name(macros["Time Eaten"])
+        macros["Time Eaten"] = validate_and_format_time(macros["Time Eaten"])
+
+        add_to_pinecone(macros, pinecone_index)
+
 
         # Store each item as a distinct entry
         store_in_database(macros)
 
     print_all_entries()  # Display all entries after processing
-    print_total_calories()
-
 # Main Function
 if __name__ == "__main__":
+    import tkinter as tk
+    from tkinter import simpledialog
+
+    # Create and hide the root window
+    root = tk.Tk()
+    root.withdraw()
+
+    # Initialize database
     initialize_database()
     
-    user_input = input("Hello, what did you eat? : ")
-    process_user_input(user_input)
+    while True:
+        # Show input dialog
+        user_input = simpledialog.askstring("Food Entry", "What did you eat?")
+        
+        # Break the loop if user cancels or closes the dialog
+        if user_input is None:
+            break
+            
+        process_user_input(user_input)
+    
+    root.destroy()

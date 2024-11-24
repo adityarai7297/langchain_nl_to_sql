@@ -25,7 +25,7 @@ def initialize_database(db_path="food_consumption.db"):
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS FoodConsumption (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            food_name TEXT,
+            item TEXT,
             quantity INTEGER,
             time_eaten DATETIME,
             calories INTEGER,
