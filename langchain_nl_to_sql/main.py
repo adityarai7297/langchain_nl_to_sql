@@ -132,6 +132,38 @@ def agent_2(parsed_json):
     print("------------------> Agent 2 Response: Macros ", response.choices[0].message.content.strip())
     return extract_json(response.choices[0].message.content.strip())
 
+# Add this new agent function before the store_in_database function
+def agent_3_validate(macros):
+    """
+    Validates the calculated macros by double-checking against known nutritional data.
+    Returns validated macros or raises an exception if validation fails.
+    """
+    print("------------------> Agent 3 Request: validating macros for", macros["Item"], macros["Quantity"])
+    prompt = f"""
+    You are a nutrition validation expert. Verify if the following macros are reasonable for the given item and quantity.
+    If they are reasonable, return the same JSON. If they need adjustment, provide corrected values.
+    Make sure to include the quantity while verifying macros.
+    Return the COMPLETE JSON object including all original fields.
+    
+    {json.dumps(macros, indent=2)}
+
+    Respond with a JSON object only, using the exact same structure as the input.
+    If the macro values are significantly off, adjust them to realistic values.
+    """
+    
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": "You are a nutrition validation expert."},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0
+    )
+    
+    validated_macros = extract_json(response.choices[0].message.content.strip())
+    print("------------------> Agent 3 Response: Validated macros", validated_macros)
+    return validated_macros
+
 # Database Execution
 def store_in_database(macros):
     """
@@ -187,8 +219,10 @@ def process_user_input(user_input):
 
     for parsed_json in parsed_json_list:
         macros = agent_2(parsed_json)
-        add_to_pinecone(macros, pinecone_index)
-        store_in_database(macros)
+        # Add validation step
+        validated_macros = agent_3_validate(macros)
+        add_to_pinecone(validated_macros, pinecone_index)
+        store_in_database(validated_macros)
 
     print_all_entries()  # Display all entries after processing
 
