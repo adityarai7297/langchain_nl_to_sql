@@ -1,42 +1,50 @@
+from typing import List, Dict, Any, Optional
 import sqlite3
 from datetime import datetime
+from contextlib import contextmanager
+from pathlib import Path
 
-# Adapter to convert datetime to a string for storage
-def adapt_datetime(dt):
-    return dt.strftime("%Y-%m-%d %H:%M:%S")
-
-# Converter to parse string back into a datetime object
-def convert_datetime(s):
-    return datetime.strptime(s.decode("utf-8"), "%Y-%m-%d %H:%M:%S")
-
-# Register adapters and converters
-sqlite3.register_adapter(datetime, adapt_datetime)
-sqlite3.register_converter("DATETIME", convert_datetime)
-
-def initialize_database(db_path="food_consumption.db"):
-
+@contextmanager
+def get_db_connection(db_path: str = "food_consumption.db"):
     """
-    Initializes the database with the required schema if it doesn't already exist.
+    Context manager for database connections.
+    
+    Args:
+        db_path (str): Path to SQLite database file
     """
     conn = sqlite3.connect(
-        db_path, detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES
+        db_path,
+        detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES
     )
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS FoodConsumption (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            item TEXT,
-            quantity INTEGER,
-            time_eaten DATETIME,
-            calories INTEGER,
-            protein FLOAT,
-            carbs FLOAT,
-            fats FLOAT,
-            fiber FLOAT
-        )
-    """)
-    conn.commit()
-    conn.close()
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+def initialize_database(db_path: str = "food_consumption.db") -> None:
+    """
+    Initialize the database with required schema.
+    
+    Args:
+        db_path (str): Path to SQLite database file
+    """
+    with get_db_connection(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS FoodConsumption (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                item TEXT NOT NULL,
+                quantity FLOAT NOT NULL,
+                time_eaten DATETIME NOT NULL,
+                calories INTEGER NOT NULL,
+                protein FLOAT NOT NULL,
+                carbs FLOAT NOT NULL,
+                fats FLOAT NOT NULL,
+                fiber FLOAT DEFAULT 0
+            )
+        """)
+        conn.commit()
+
 def update_database_schema():
     conn = sqlite3.connect("food_consumption.db")
     cursor = conn.cursor()
@@ -118,5 +126,34 @@ def print_total_calories():
 
     except sqlite3.Error as e:
         print(f"Error fetching data: {e}")
+    finally:
+        conn.close()
+
+def store_in_database(macros, db_path="food_consumption.db"):
+    """
+    Stores the validated macros in the SQLite database.
+    """
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute("""
+            INSERT INTO FoodConsumption 
+            (item, quantity, time_eaten, calories, protein, carbs, fats, fiber)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            macros["Item"],
+            macros["Quantity"],
+            macros["Time Eaten"],
+            macros["Calories"],
+            macros["Protein"],
+            macros["Carbs"],
+            macros["Fats"],
+            macros["Fiber"]
+        ))
+        conn.commit()
+        print(f"Stored {macros['Item']} in database.")
+    except sqlite3.Error as e:
+        print(f"Error storing in database: {e}")
     finally:
         conn.close()
