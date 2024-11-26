@@ -23,54 +23,12 @@ def extract_json(gpt_response):
     except json.JSONDecodeError as e:
         raise ValueError(f"Error decoding JSON: {e}")
 
-def resolve_dynamic_dates(timestamp):
-    """
-    Replace placeholders like 'Today' or 'Yesterday' in timestamps with actual dates.
-    """
-    current_date = datetime.now()
-    if "Today" in timestamp:
-        timestamp = timestamp.replace("Today", current_date.strftime("%A, %b %d, %Y"))
-    elif "Yesterday" in timestamp:
-        yesterday_date = current_date - timedelta(days=1)
-        timestamp = timestamp.replace("Yesterday", yesterday_date.strftime("%A, %b %d, %Y"))
-    return timestamp
-
-def normalize_day_name(timestamp):
-    """
-    Expands abbreviated day names in a timestamp to full names.
-    """
-    day_abbrev_to_full = {
-        "Mon": "Monday",
-        "Tue": "Tuesday",
-        "Wed": "Wednesday",
-        "Thu": "Thursday",
-        "Fri": "Friday",
-        "Sat": "Saturday",
-        "Sun": "Sunday",
-    }
-
-    for abbrev, full in day_abbrev_to_full.items():
-        if f"{abbrev}," in timestamp or f"{abbrev} " in timestamp:
-            return timestamp.replace(abbrev, full)
-    return timestamp
-
-def validate_and_format_time(time_eaten):
-    """
-    Validates and reformats the 'Time Eaten' field to match the desired format.
-    """
-    if time_eaten.strip().lower() == "current time":
-        return datetime.now().strftime("%I:%M %p, %A, %b %d, %Y")
-
-    try:
-        return datetime.strptime(time_eaten, "%I:%M %p, %A, %b %d, %Y").strftime("%I:%M %p, %A, %b %d, %Y")
-    except ValueError:
-        return datetime.now().strftime("%I:%M %p, %A, %b %d, %Y")
 
 # Agent 1: Parsing Natural Language
 def agent_1(user_input):
     """
     Parses natural language input into structured JSON format.
-    Handles multiple items and ambiguous times dynamically.
+    Handles multiple items.
     """
     prompt = f"""
     You are an assistant that parses natural language inputs about food consumption into valid JSON format.
@@ -79,17 +37,11 @@ def agent_1(user_input):
     - Ensure that combinations like 'Diet Coke and Naan' are separated as distinct entries.
     - Always output a valid JSON array with no additional text, comments, or explanations.
     - Use double quotes (" ") for all keys and string values.
+    - The 'Time Eaten' field should be in the format "HH:MM AM, DD, MMM, YYYY".
+    - If no time is mentioned,use CURRENT TIME = {datetime.now().strftime("%H:%M %p, %d, %b, %Y")}".
+    - If yesterday morning, today evening, and other unclear times are mentioned, intelligently infer the time in the format "HH:MM AM, DD, MMM, YYYY" using CURRENT TIME as reference.
     - Ensure all timestamps are normalized and resolved.
 
-    Handle ambiguous times as follows:
-    - If the input mentions 'this morning', assume today at 8:00 AM.
-    - If the input mentions 'yesterday', assume the previous day at 12:00 PM.
-    - If the input mentions 'tonight', assume today at 8:00 PM.
-    - If the input mentions 'at breakfast', 'at lunch', or 'after dinner', infer times dynamically:
-        - Breakfast: 8:00 AM.
-        - Lunch: 1:00 PM.
-        - Dinner: 8:00 PM.
-    - If no time is mentioned, default to the current time in the format "HH:MM AM/PM, Day, Month DD, YYYY".
 
     Example Input: "I had two Diet Cokes and a bowl of carrots this morning."
     Example Output:
@@ -98,18 +50,19 @@ def agent_1(user_input):
             "Task": "Add",
             "Item": "Diet Coke",
             "Quantity": "2 cans",
-            "Time Eaten": "08:00 AM, Monday, Nov 20, 2023"
+            "Time Eaten": "HH:MM AM, DD, MMM, YYYY"
         }},
         {{
             "Task": "Add",
             "Item": "Carrots",
             "Quantity": "1 bowl",
-            "Time Eaten": "08:00 AM, Monday, Nov 20, 2023"
+            "Time Eaten": "HH:MM AM, DD, MMM, YYYY"
         }}
     ]
 
     Parse this input: "{user_input}"
     """
+  
     print("------------------> Agent 1 Request: Parsing", user_input)
     response = client.chat.completions.create(
         model="gpt-4o",
@@ -124,8 +77,26 @@ def agent_1(user_input):
     cleaned_response = response.choices[0].message.content.strip()
     cleaned_response = re.sub(r'^```json\s*|\s*```$', '', cleaned_response)
     
+    # Check for missing information
+    parsed_json_list = json.loads(cleaned_response)
+    for entry in parsed_json_list:
+        if not entry.get("Item") or not entry.get("Quantity") or not entry.get("Time Eaten"):
+            # Ask for clarification
+            clarification_needed = []
+            if not entry.get("Item"):
+                clarification_needed.append("item name")
+            if not entry.get("Quantity"):
+                clarification_needed.append("quantity")
+            if not entry.get("Time Eaten"):
+                clarification_needed.append("time eaten")
+            
+            clarification_prompt = f"Could you please clarify the {', '.join(clarification_needed)} for '{user_input}'?"
+            print(clarification_prompt)
+            # Here you would implement a way to get the user's response and update the entry accordingly
+            # For example, using a simple input() call or a GUI dialog
+
     print("------------------> Agent 1 Response: Parsed JSON", cleaned_response)
-    return json.loads(cleaned_response)
+    return parsed_json_list
 
 # Agent 2: Calculate Macros
 def agent_2(parsed_json):
@@ -216,19 +187,12 @@ def process_user_input(user_input):
 
     for parsed_json in parsed_json_list:
         macros = agent_2(parsed_json)
-
-        # Resolve dynamic dates and validate time
-        macros["Time Eaten"] = resolve_dynamic_dates(macros["Time Eaten"])
-        macros["Time Eaten"] = normalize_day_name(macros["Time Eaten"])
-        macros["Time Eaten"] = validate_and_format_time(macros["Time Eaten"])
-
         add_to_pinecone(macros, pinecone_index)
-
-
-        # Store each item as a distinct entry
         store_in_database(macros)
 
     print_all_entries()  # Display all entries after processing
+
+
 # Main Function
 if __name__ == "__main__":
     import tkinter as tk
