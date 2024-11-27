@@ -7,6 +7,7 @@ from .services.agent_service import AgentService
 from .repositories.food_repository import FoodRepository
 from .config import get_db
 from app.utils.db_utils import initialize_database
+from .api.endpoints import speech
 import traceback
 import logging
 
@@ -26,6 +27,12 @@ app.add_middleware(
 
 # Add this near the start of your application, before creating the FastAPI app
 initialize_database()
+
+app.include_router(
+    speech.router,
+    prefix="/api/v1",
+    tags=["speech"]
+)
 
 @app.post("/api/food-entries", response_model=List[MacroResponse])
 async def create_food_entry(

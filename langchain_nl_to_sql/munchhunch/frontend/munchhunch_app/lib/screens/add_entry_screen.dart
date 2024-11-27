@@ -1,9 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/food_provider.dart';
+import '../widgets/chat_input.dart';
 
 class AddEntryScreen extends ConsumerStatefulWidget {
-  const AddEntryScreen({super.key});
+  final String? initialText;
+
+  const AddEntryScreen({
+    super.key,
+    this.initialText,
+  });
 
   @override
   ConsumerState<AddEntryScreen> createState() => _AddEntryScreenState();
@@ -11,12 +17,18 @@ class AddEntryScreen extends ConsumerStatefulWidget {
 
 class _AddEntryScreenState extends ConsumerState<AddEntryScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _inputController = TextEditingController();
+  late final TextEditingController _itemController;
   bool _isProcessing = false;
 
   @override
+  void initState() {
+    super.initState();
+    _itemController = TextEditingController(text: widget.initialText);
+  }
+
+  @override
   void dispose() {
-    _inputController.dispose();
+    _itemController.dispose();
     super.dispose();
   }
 
@@ -27,7 +39,7 @@ class _AddEntryScreenState extends ConsumerState<AddEntryScreen> {
 
     try {
       await ref.read(
-        addFoodEntryProvider(_inputController.text).future
+        addFoodEntryProvider(_itemController.text).future
       );
       
       if (mounted) {
@@ -63,51 +75,34 @@ class _AddEntryScreenState extends ConsumerState<AddEntryScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              TextFormField(
-                controller: _inputController,
-                decoration: const InputDecoration(
-                  labelText: 'What did you eat?',
-                  hintText: 'e.g., "I had 2 slices of pizza for lunch"',
-                  border: OutlineInputBorder(),
-                ),
-                maxLines: 3,
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter what you ate';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: _isProcessing ? null : _processEntry,
-                child: _isProcessing
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('Add Entry'),
-              ),
-              const SizedBox(height: 16),
-              const Card(
-                child: Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Tips:',
-                        style: TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      SizedBox(height: 8),
-                      Text('• Include the quantity of food'),
-                      Text('• Mention when you ate it'),
-                      Text('• Be as specific as possible'),
-                      Text('• Example: "2 slices of pepperoni pizza at 1pm"'),
-                    ],
+              Expanded(
+                child: Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Tips:',
+                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        const Text('• Include the quantity of food'),
+                        const Text('• Mention when you ate it'),
+                        const Text('• Be as specific as possible'),
+                        const Text('• Example: "2 slices of pepperoni pizza at 1pm"'),
+                      ],
+                    ),
                   ),
                 ),
+              ),
+              ChatInput(
+                onSubmit: (text) {
+                  _itemController.text = text;
+                  _processEntry();
+                },
               ),
             ],
           ),

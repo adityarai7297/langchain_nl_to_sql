@@ -38,4 +38,30 @@ class ApiService {
       throw Exception('Failed to fetch food entries: $e');
     }
   }
+
+  Future<String?> transcribeAudio(String audioPath) async {
+    try {
+      final formData = FormData.fromMap({
+        'audio': await MultipartFile.fromFile(audioPath),
+      });
+
+      final response = await _dio.post(
+        '/v1/speech-to-text/',
+        data: formData,
+        options: Options(
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+        ),
+      );
+
+      if (response.statusCode == 200) {
+        return response.data['text'];
+      }
+      return null;
+    } catch (e) {
+      print('Error transcribing audio: $e');
+      return null;
+    }
+  }
 } 
