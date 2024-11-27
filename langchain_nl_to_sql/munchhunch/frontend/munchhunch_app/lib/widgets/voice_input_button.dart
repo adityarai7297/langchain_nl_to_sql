@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/audio_service.dart';
+import 'dart:async';
 
 class VoiceInputButton extends StatefulWidget {
   final Function(String) onTranscribed;
@@ -13,16 +14,20 @@ class VoiceInputButton extends StatefulWidget {
   State<VoiceInputButton> createState() => _VoiceInputButtonState();
 }
 
-class _VoiceInputButtonState extends State<VoiceInputButton> with SingleTickerProviderStateMixin {
+class _VoiceInputButtonState extends State<VoiceInputButton>
+    with SingleTickerProviderStateMixin {
   final AudioService _audioService = AudioService();
   bool _isRecording = false;
+  bool _isTranscribing = false;
   late AnimationController _animationController;
+  Stopwatch _recordingStopwatch = Stopwatch();
+  Timer? _recordingTimer;
 
   @override
   void initState() {
     super.initState();
     _animationController = AnimationController(
-      duration: const Duration(milliseconds: 1000),
+      duration: const Duration(milliseconds: 1500),
       vsync: this,
     );
   }
@@ -30,68 +35,129 @@ class _VoiceInputButtonState extends State<VoiceInputButton> with SingleTickerPr
   @override
   void dispose() {
     _animationController.dispose();
+    _recordingTimer?.cancel();
     super.dispose();
   }
 
-  Future<void> _toggleRecording() async {
-    if (!_isRecording) {
-      final hasPermission = await _audioService.startRecording();
-      if (hasPermission) {
-        setState(() => _isRecording = true);
-        _animationController.repeat(reverse: true);
-        
-        // Show recording indicator
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Recording... Tap the mic again to stop'),
-            duration: Duration(days: 365), // Long duration, will be dismissed manually
-          ),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Microphone permission denied')),
-        );
-      }
+  String _formatDuration(Duration duration) {
+    String twoDigits(int n) => n.toString().padLeft(2, '0');
+    String minutes = twoDigits(duration.inMinutes.remainder(60));
+    String seconds = twoDigits(duration.inSeconds.remainder(60));
+    return '$minutes:$seconds';
+  }
+
+  Future<void> _startRecording() async {
+    final hasPermission = await _audioService.startRecording();
+    if (hasPermission) {
+      setState(() => _isRecording = true);
+      _animationController.repeat();
+      _recordingStopwatch.start();
+      _recordingTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+        setState(() {});
+      });
     } else {
-      final audioPath = await _audioService.stopRecording();
-      setState(() => _isRecording = false);
-      _animationController.stop();
-      _animationController.reset();
+      Future.delayed(const Duration(seconds: 2), () {
+        if (mounted) _showStatus('Microphone permission denied');
+      });
+    }
+  }
+
+  Future<void> _stopRecording() async {
+    final audioPath = await _audioService.stopRecording();
+    setState(() {
+      _isRecording = false;
+      _isTranscribing = true;
+    });
+    _animationController.stop();
+    _animationController.reset();
+    _recordingStopwatch.stop();
+    _recordingStopwatch.reset();
+    _recordingTimer?.cancel();
+
+    if (audioPath != null) {
+      final transcribedText = await _audioService.transcribeAudio(audioPath);
       
-      // Dismiss the recording indicator
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      setState(() => _isTranscribing = false);
       
-      if (audioPath != null) {
-        // Show transcribing indicator
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Transcribing...')),
-        );
-        
-        final transcribedText = await _audioService.transcribeAudio(audioPath);
-        if (transcribedText != null) {
-          widget.onTranscribed(transcribedText);
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Failed to transcribe audio')),
-          );
-        }
+      if (transcribedText != null) {
+        widget.onTranscribed(transcribedText);
       }
     }
   }
 
+  void _showStatus(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _animationController,
-      builder: (context, child) {
-        return IconButton(
-          icon: Icon(_isRecording ? Icons.mic : Icons.mic_none),
-          onPressed: _toggleRecording,
-          color: _isRecording 
-            ? Color.lerp(Colors.red, Colors.pink, _animationController.value)
-            : null,
-        );
-      },
+    return SizedBox(
+      width: 48,
+      height: 48,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          if (_isRecording)
+            Positioned(
+              bottom: 64,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Text(
+                  _formatDuration(_recordingStopwatch.elapsed),
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
+          Center(
+            child: GestureDetector(
+              onTap: _isTranscribing ? null : (_isRecording ? _stopRecording : _startRecording),
+              child: AnimatedBuilder(
+                animation: _animationController,
+                builder: (context, child) {
+                  return Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: _isRecording
+                          ? Color.lerp(
+                              Theme.of(context).colorScheme.error,
+                              Theme.of(context).colorScheme.errorContainer,
+                              _animationController.value,
+                            )
+                          : Colors.transparent,
+                    ),
+                    child: _isTranscribing
+                        ? SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Theme.of(context).colorScheme.primary,
+                              ),
+                            ),
+                          )
+                        : Icon(
+                            _isRecording ? Icons.stop : Icons.mic,
+                            color: _isRecording
+                                ? Theme.of(context).colorScheme.onError
+                                : Theme.of(context).colorScheme.onSurfaceVariant,
+                            size: 24,
+                          ),
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

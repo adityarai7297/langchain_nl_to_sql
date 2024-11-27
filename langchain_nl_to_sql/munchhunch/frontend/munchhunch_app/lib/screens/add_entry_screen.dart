@@ -19,6 +19,7 @@ class _AddEntryScreenState extends ConsumerState<AddEntryScreen> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _itemController;
   bool _isProcessing = false;
+  String _processingStatus = '';
 
   @override
   void initState() {
@@ -35,12 +36,27 @@ class _AddEntryScreenState extends ConsumerState<AddEntryScreen> {
   Future<void> _processEntry() async {
     if (!_formKey.currentState!.validate()) return;
 
-    setState(() => _isProcessing = true);
+    setState(() {
+      _isProcessing = true;
+      _processingStatus = 'Identifying food items...';
+    });
 
     try {
-      await ref.read(
-        addFoodEntryProvider(_itemController.text).future
-      );
+      await Future.delayed(const Duration(milliseconds: 2000));
+      setState(() => _processingStatus = 'Looking up nutritional information...');
+      
+      await Future.delayed(const Duration(milliseconds: 2000));
+      setState(() => _processingStatus = 'Validating data...');
+
+      await Future.delayed(const Duration(milliseconds: 2000));
+      setState(() => _processingStatus = 'Finishing up...');
+
+      await Future.delayed(const Duration(milliseconds: 2000));
+      setState(() => _processingStatus = 'Yum Yum...');
+      
+      await ref.read(addFoodEntryProvider(_itemController.text).future);
+      
+      setState(() => _processingStatus = 'Storing entry...');
       
       if (mounted) {
         ref.refresh(foodEntriesProvider);
@@ -57,7 +73,10 @@ class _AddEntryScreenState extends ConsumerState<AddEntryScreen> {
       }
     } finally {
       if (mounted) {
-        setState(() => _isProcessing = false);
+        setState(() {
+          _isProcessing = false;
+          _processingStatus = '';
+        });
       }
     }
   }
@@ -68,45 +87,68 @@ class _AddEntryScreenState extends ConsumerState<AddEntryScreen> {
       appBar: AppBar(
         title: const Text('Add Food Entry'),
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Form(
-          key: _formKey,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(
+      body: Stack(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Form(
+              key: _formKey,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(
+                    child: Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Tips:',
+                              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            const Text('• Include the quantity of food'),
+                            const Text('• Mention when you ate it'),
+                            const Text('• Be as specific as possible'),
+                            const Text('• Example: "2 slices of pepperoni pizza at 1pm"'),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  ChatInput(
+                    onSubmit: (text) {
+                      _itemController.text = text;
+                      _processEntry();
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (_isProcessing)
+            Container(
+              color: Colors.black54,
+              child: Center(
                 child: Card(
                   child: Padding(
                     padding: const EdgeInsets.all(16),
                     child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text(
-                          'Tips:',
-                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        const Text('• Include the quantity of food'),
-                        const Text('• Mention when you ate it'),
-                        const Text('• Be as specific as possible'),
-                        const Text('• Example: "2 slices of pepperoni pizza at 1pm"'),
+                        const CircularProgressIndicator(),
+                        const SizedBox(height: 16),
+                        Text(_processingStatus),
                       ],
                     ),
                   ),
                 ),
               ),
-              ChatInput(
-                onSubmit: (text) {
-                  _itemController.text = text;
-                  _processEntry();
-                },
-              ),
-            ],
-          ),
-        ),
+            ),
+        ],
       ),
     );
   }

@@ -3,8 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/food_provider.dart';
 import '../models/food_entry.dart';
 import 'add_entry_screen.dart';
-import '../services/audio_service.dart';
-import '../widgets/voice_input_button.dart';
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -17,15 +15,6 @@ class HomeScreen extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('MunchHunch'),
         actions: [
-          VoiceInputButton(
-            onTranscribed: (text) {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (context) => AddEntryScreen(initialText: text),
-                ),
-              );
-            },
-          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: () => ref.refresh(foodEntriesProvider),
